@@ -41,9 +41,7 @@ def check_kkt(X, y, coef, alpha, weights):
         viol = max(viol, np.maximum(0.0, np.abs(grad[~active]) - alpha * weights[~active]).max())
     scale = max(1.0, alpha * weights.max())
     if viol > 1e-7 * scale:
-        raise RuntimeError(
-            f"weighted lasso did not converge: KKT violation {viol} "
-            f"at alpha={alpha}")
+        raise RuntimeError(f"weighted lasso did not converge: KKT violation {viol} ")
 
 
 # Design, penalty weights, grids, folds
@@ -119,7 +117,8 @@ def practical_transmission(X0, y0, X_list, y_list, folds=None, V=3):
 
     # Step 1: constraint bounds B(lambT) and the single-task fallback
     bh0_T = weighted_lasso(X0, y0, lambt_grid, ones_p)
-    # s_hat: cùng ngưỡng 1e-9 với check_kkt, vì cả hai đều là support l0
+
+    # s_hat: cùng ngưỡng 1e-9 với check_kkt
     B = np.array([np.abs(b).sum() + int((np.abs(b) > 1e-9).sum()) * lamT
                   for b, lamT in zip(bh0_T, lambt_grid)])
 
@@ -164,7 +163,7 @@ def practical_transmission(X0, y0, X_list, y_list, folds=None, V=3):
     return {
         "coef": coef,
         "branch": branch,
-        "support": np.flatnonzero(np.abs(coef) > 1e-9),
+        "feature_selection": np.flatnonzero(np.abs(coef) > 1e-9),
         "lam0_hat": None if best is None else lamb0_grid[best],
         "lam0_grid": lamb0_grid, "lamT_grid": lambt_grid,
         "Lcv": Lcv, "Lcv_T": Lcv_T, "G": G, "R": R, "B": B,
