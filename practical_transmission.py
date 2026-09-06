@@ -1,22 +1,25 @@
 import numpy as np
-from skglm import WeightedLasso
-
+from sklearn.linear_model import Lasso
 
 # Solver
 
 def weighted_lasso(X, y, alphas, weights):
     # argmin 1/(2n)||y - Xw||^2 + alpha*sum_j a_j|w_j|.
-    model = WeightedLasso(weights=weights, tol=1e-10, fit_intercept=False)
+    # sklearn argmin 1/(2n)||y - X~v||^2 + alpha * |v|
+
+    # v = a * w, vì aj > 0 -> |w| = |v| / a
+    # X~ = X / a
+    Xs = np.asfortranarray(X / weights, dtype=np.float64)
+    y = np.ascontiguousarray(y, dtype=np.float64)
+    model = Lasso(fit_intercept=False, tol=1e-14, max_iter=200000, warm_start=True)
     coefs = []
     for alpha in alphas:
         model.alpha = alpha
-        model.fit(X, y)
-        coef = model.coef_.copy()
+        model.fit(Xs, y, check_input=False)
 
-        # skglm dùng KKT làm điều kiện dừng, nhưng khi hết max_iter mà chưa đạt
-        # tol thì nó im lặng trả về nghiệm chưa hội tụ (anderson_cd.py không có
-        # ConvergenceWarning). G, R, s_hat đều so trực tiếp với ngưỡng nên phải
-        # tự kiểm, để lỗi nổ ra thay vì âm thầm làm sai hậu kiểm.
+        # w = v / a
+        coef = model.coef_ / weights
+
         check_kkt(X, y, coef, alpha, weights)
         coefs.append(coef)
     return coefs
@@ -24,8 +27,12 @@ def weighted_lasso(X, y, alphas, weights):
 
 # check nghiệm tối ưu thỏa kkt hay chưa
 def check_kkt(X, y, coef, alpha, weights):
+    if not np.isfinite(coef).all():
+        raise RuntimeError("weighted lasso returned non-finite coefficients")
     grad = -X.T @ (y - X @ coef) / X.shape[0]
-    active = np.abs(coef) > 1e-9
+    if not np.isfinite(grad).all():
+        raise RuntimeError("weighted lasso has a non-finite KKT gradient")
+    active = np.abs(coef) != 0
     viol = 0.0
 
     # Beta != 0 -> subgradient = sign(Beta)
@@ -35,7 +42,7 @@ def check_kkt(X, y, coef, alpha, weights):
 
     # Beta = 0 -> subgradient -> grad|beta| = [-1, 1]
     # kkt: z in [-1, 1] : grad(L) + alpha * w * z = 0 
-    # <-> |grad| <= alpha * w <-> |grad| - alpha * z <= 0
+    # <-> |grad| <= alpha * weights
 
     if (~active).any():
         viol = max(viol, np.maximum(0.0, np.abs(grad[~active]) - alpha * weights[~active]).max())
@@ -79,13 +86,95 @@ def penalty_weights(X0, X_list):
     a[K * p:] = 1.0 # a0
     return a
 
-# choice para in A.3 (theo collary 5)
-# khi h = 0 thì vế số hạng đầu của lambda_0 mất,
-def make_grids(p, N, nt, M_0=100, M_T=20):
-    # tạo grid lambda giảm dần 
-    lambda_0 = np.sqrt(np.log(p) / N) * np.geomspace(1e-1, 10 ** 1.5, M_0)
-    lambda_t = np.sqrt(np.log(p) / nt) * np.geomspace(1e-1, 1e1, M_T)
-    return lambda_0[::-1].copy(), lambda_t[::-1].copy()
+def target_noise_score_quantile(X0, sigma, quantile, n_draws, batch_size, rng):
+    nt = X0.shape[0]
+    scores = np.empty(n_draws)
+
+    start = 0
+    while start < n_draws:
+        stop = min(start + batch_size, n_draws)
+        noise = sigma * rng.standard_normal((nt, stop - start))
+        scores[start:stop] = np.max(np.abs(X0.T @ noise), axis=0) / nt
+        start = stop
+
+    return float(np.quantile(scores, quantile))
+
+
+def transmission_noise_score_quantile(
+        X0, X_list, sigma, quantile, n_draws, batch_size, rng):
+    nt, p = X0.shape
+    N = nt + sum(Xk.shape[0] for Xk in X_list)
+    source_weights = [Xk.shape[0] / np.sqrt(N * nt) for Xk in X_list]
+    scores = np.empty(n_draws)
+
+    start = 0
+    while start < n_draws:
+        stop = min(start + batch_size, n_draws)
+        width = stop - start
+
+        target_noise = sigma * rng.standard_normal((nt, width))
+        common_score = X0.T @ target_noise
+        batch_scores = np.zeros(width)
+
+        for Xk, ak in zip(X_list, source_weights):
+            source_noise = sigma * rng.standard_normal((Xk.shape[0], width))
+            source_score = Xk.T @ source_noise
+
+            # Scores for delta^(k), whose weighted-Lasso penalty is lambda_0 * a_k.
+            batch_scores = np.maximum(
+                batch_scores,
+                np.max(np.abs(source_score), axis=0) / (N * ak),
+            )
+
+            # The beta^(0) block appears in every source and target linear predictor.
+            common_score += source_score
+
+        batch_scores = np.maximum(
+            batch_scores,
+            np.max(np.abs(common_score), axis=0) / N,
+        )
+        scores[start:stop] = batch_scores
+        start = stop
+
+    return float(np.quantile(scores, quantile))
+
+
+def noise_score_references(
+        X0, X_list, sigma=1.0, quantile=0.95,
+        n_draws=2000, batch_size=100, seed=0):
+    X0 = np.asarray(X0, dtype=float)
+    X_list = [np.asarray(Xk, dtype=float) for Xk in X_list]
+
+    target_seed, transmission_seed = np.random.SeedSequence(seed).spawn(2)
+    lambda_T_ref = target_noise_score_quantile(
+        X0, sigma, quantile, n_draws, batch_size,
+        np.random.default_rng(target_seed),
+    )
+    lambda_0_ref = transmission_noise_score_quantile(
+        X0, X_list, sigma, quantile, n_draws, batch_size,
+        np.random.default_rng(transmission_seed),
+    )
+
+    return lambda_0_ref, lambda_T_ref
+
+
+def make_grids(
+        X0, X_list, sigma=1.0, quantile=0.95,
+        M_0=60, M_T=40, c_min=0.1, c_max=4.0,
+        n_draws=2000, batch_size=100, seed=0):
+
+    lambda_0_ref, lambda_T_ref = noise_score_references(
+        X0, X_list, sigma=sigma, quantile=quantile,
+        n_draws=n_draws, batch_size=batch_size, seed=seed,
+    )
+
+    multipliers_0 = np.geomspace(c_min, c_max, M_0)
+    multipliers_T = np.geomspace(c_min, c_max, M_T)
+    lambda_0 = lambda_0_ref * multipliers_0
+    lambda_T = lambda_T_ref * multipliers_T
+
+    # Descending order preserves efficient warm starts in weighted_lasso.
+    return lambda_0[::-1].copy(), lambda_T[::-1].copy()
 
 
 def make_folds(nt, V=3):
@@ -99,7 +188,7 @@ def target_loss(X0, y0, idx, beta):
     return r @ r / (2 * len(idx))
 
 
-def practical_transmission(X0, y0, X_list, y_list, folds=None, V=3):
+def practical_transmission_CV(X0, y0, X_list, y_list, folds=None, V=3):
     
     X0 = np.asarray(X0, float)
     y0 = np.asarray(y0, float)
@@ -108,7 +197,7 @@ def practical_transmission(X0, y0, X_list, y_list, folds=None, V=3):
     N = sum(np.shape(Xk)[0] for Xk in X_list) + nt
     K = len(X_list)
 
-    lamb0_grid, lambt_grid = make_grids(p, N, nt)
+    lamb0_grid, lambt_grid = make_grids(X0, X_list)
   
     if folds is None:
         folds = make_folds(nt, V)
@@ -118,8 +207,7 @@ def practical_transmission(X0, y0, X_list, y_list, folds=None, V=3):
     # Step 1: constraint bounds B(lambT) and the single-task fallback
     bh0_T = weighted_lasso(X0, y0, lambt_grid, ones_p)
 
-    # s_hat: cùng ngưỡng 1e-9 với check_kkt
-    B = np.array([np.abs(b).sum() + int((np.abs(b) > 1e-9).sum()) * lamT
+    B = np.array([np.abs(b).sum() + int(np.count_nonzero(b)) * lamT
                   for b, lamT in zip(bh0_T, lambt_grid)])
 
     Lcv_T = np.zeros(len(lambt_grid))
@@ -163,7 +251,7 @@ def practical_transmission(X0, y0, X_list, y_list, folds=None, V=3):
     return {
         "coef": coef,
         "branch": branch,
-        "feature_selection": np.flatnonzero(np.abs(coef) > 1e-9),
+        "feature_selection": np.flatnonzero(np.abs(coef) != 0),
         "lam0_hat": None if best is None else lamb0_grid[best],
         "lam0_grid": lamb0_grid, "lamT_grid": lambt_grid,
         "Lcv": Lcv, "Lcv_T": Lcv_T, "G": G, "R": R, "B": B,
@@ -171,4 +259,39 @@ def practical_transmission(X0, y0, X_list, y_list, folds=None, V=3):
         "beta_path": beta_full,
     }
 
-    
+
+
+def practical_transmission_non_CV(X0, y0, X_list, y_list, lambda_0, lambda_T):
+
+    X0 = np.asarray(X0, dtype=float)
+    y0 = np.asarray(y0, dtype=float)
+    nt, p = X0.shape
+
+    # Step 1: target fit, verification bound and fallback estimate.
+    beta_T = weighted_lasso(X0, y0, [lambda_T], np.ones(p))[0]
+    s_hat = int(np.count_nonzero(beta_T))
+    B = float(np.abs(beta_T).sum() + s_hat * lambda_T)
+
+    # Step 2: a single transfer candidate using all samples.
+    X_tf, y_tf = build_tf_design(X0, y0, X_list, y_list)
+    weights = penalty_weights(X0, X_list)
+    theta = weighted_lasso(X_tf, y_tf, [lambda_0], weights)[0]
+    beta_candidate = theta[len(X_list) * p:].copy()
+
+    # Steps 3 and 4: verify the candidate, or fall back to the target fit.
+    G = float(np.abs(X0.T @ (y0 - X0 @ beta_candidate) / nt).max())
+    R = float(np.abs(beta_candidate).sum())
+    feasible = bool(G <= lambda_T and R <= B)
+    coef = beta_candidate if feasible else beta_T
+    branch = "transmission" if feasible else "fallback"
+
+    return {
+        "coef": coef,
+        "branch": branch,
+        "feature_selection": np.flatnonzero(np.abs(coef) != 0),
+        "lambda_0": lambda_0, "lambda_T": lambda_T,
+        "beta_T": beta_T, "theta": theta, "beta_candidate": beta_candidate,
+        "s_hat": s_hat, "G": G, "R": R, "B": B,
+        "feasible": feasible,
+    }
+
