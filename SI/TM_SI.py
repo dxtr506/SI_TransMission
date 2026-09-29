@@ -1,24 +1,8 @@
-from pathlib import Path
-import sys
-
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from practical_transmission import (
-    build_tf_design,
-    penalty_weights,
-    practical_transmission_non_CV,
-    weighted_lasso,
-)
-from sub_prob import compute_ZG, compute_ZR, compute_Zu, compute_Zv
-from utils import (
-    calculate_a_b,
-    calculate_tn_p_value,
-    construct_Sigma,
-    construct_test_statistic,
-    merge_intervals,
-)
+from TransMission.transmission import (build_tf_design, penalty_weights, transmission_fixed, weighted_lasso,)
+from SI.sub_prob import compute_ZG, compute_ZR, compute_Zu, compute_Zv
+from SI.utils import (calculate_a_b, calculate_tn_p_value, construct_Sigma, construct_test_statistic, merge_intervals,)
 
 
 def divide_and_conquer(X0, X, a, b, M, w, lambda_0, lambda_T, z_min, z_max):
@@ -98,8 +82,8 @@ def divide_and_conquer(X0, X, a, b, M, w, lambda_0, lambda_T, z_min, z_max):
 
 
 def fixed_tuning_TM_SI(X0, y0, X_list, y_list, lambda_0, lambda_T, Sigma_0, Sigma_K):
-    # Test every feature of the observed model.
-    observed = practical_transmission_non_CV(
+   
+    observed = transmission_fixed(
         X0, y0, X_list, y_list, lambda_0, lambda_T
     )
     M = observed["feature_selection"]
@@ -133,12 +117,14 @@ def fixed_tuning_TM_SI(X0, y0, X_list, y_list, lambda_0, lambda_T, Sigma_0, Sigm
     }
 
 
-def fixed_tuning_TM_SI_randj(X0, y0, X_list, y_list, lambda_0, lambda_T, Sigma_0, Sigma_K, rng=None):
-    # Test one feature drawn uniformly from the observed model.
-    observed = practical_transmission_non_CV(X0, y0, X_list, y_list, lambda_0, lambda_T)
-    M = observed["feature_selection"]
+def fixed_tuning_TM_SI_randj(X0, y0, X_list, y_list, lambda_0, lambda_T, Sigma_0, Sigma_K,
+                             rng=None, candidates=None):
 
-    if len(M) == 0:
+    observed = transmission_fixed(X0, y0, X_list, y_list, lambda_0, lambda_T)
+    M = observed["feature_selection"]
+    pool = M if candidates is None else np.intersect1d(M, candidates)
+
+    if len(pool) == 0:
         results = []
     else:
         X, Y = build_tf_design(X0, y0, X_list, y_list)
@@ -146,7 +132,7 @@ def fixed_tuning_TM_SI_randj(X0, y0, X_list, y_list, lambda_0, lambda_T, Sigma_0
         Sigma = construct_Sigma(Sigma_0, Sigma_K)
 
         rng = np.random.default_rng(rng)
-        j = M[rng.integers(len(M))]
+        j = pool[rng.integers(len(pool))]
 
         etaj, etajTY = construct_test_statistic(j, X0, Y, M)
         a, b = calculate_a_b(etaj, Y, Sigma)
