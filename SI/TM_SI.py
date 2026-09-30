@@ -10,7 +10,7 @@ def divide_and_conquer(X0, X, a, b, M, w, lambda_0, lambda_T, z_min, z_max):
     a = np.asarray(a, dtype=float).ravel()
     b = np.asarray(b, dtype=float).ravel()
 
-    nT, p = X0.shape
+    nt, p = X0.shape
     N = X.shape[0]
     target_start = X.shape[1] - p
 
@@ -21,7 +21,7 @@ def divide_and_conquer(X0, X, a, b, M, w, lambda_0, lambda_T, z_min, z_max):
         # Target Lasso state; beta_T(z) = cT + dT z 
 
         # build y = a + bz
-        Y0z = (a + b * z)[-nT:]
+        Y0z = (a + b * z)[-nt:]
         beta_T = weighted_lasso(X0, Y0z, [lambda_T], np.ones(p))[0]
 
         # active, inactive, signs
@@ -29,8 +29,8 @@ def divide_and_conquer(X0, X, a, b, M, w, lambda_0, lambda_T, z_min, z_max):
         Ac = np.setdiff1d(np.arange(p), A)
         sA = np.sign(beta_T[A])
 
-        lu, ru, cT, dT = compute_Zu(X0[:, A], X0[:, Ac], a[-nT:], b[-nT:], 
-                                    A, sA, Ac, lambda_T, nT)
+        lu, ru, cT, dT = compute_Zu(X0[:, A], X0[:, Ac], a[-nt:], b[-nt:], 
+                                    A, sA, Ac, lambda_T, nt)
         right_u = min(ru, z_max)
  
 
@@ -55,7 +55,7 @@ def divide_and_conquer(X0, X, a, b, M, w, lambda_0, lambda_T, z_min, z_max):
             keep = L >= target_start
             C, sC = L[keep] - target_start, sL[keep]
 
-            ZG = compute_ZG(X0, a[-nT:], b[-nT:], cC, dC, lambda_T, nT)
+            ZG = compute_ZG(X0, a[-nt:], b[-nt:], cC, dC, lambda_T, nt)
             ZR = compute_ZR(cT, dT, A, sA, cC, dC, C, sC, lambda_T)
 
             # Transmission where both checks pass, fallback on the rest.

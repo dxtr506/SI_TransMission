@@ -23,8 +23,8 @@ def solve_interval(psi, gamma):
     return [lu, ru]
 
 # KKT for target Lasso 
-def compute_Zu(XA, XAc, a, b, A, sA, Ac, lambda_T, nT):
-    # Solves min 1/(2 nT) ||a + bz - X beta||^2 + lambda_T ||beta||_1
+def compute_Zu(XA, XAc, a, b, A, sA, Ac, lambda_T, nt):
+    # Solves min 1/(2 nt) ||a + bz - X beta||^2 + lambda_T ||beta||_1
     # on (A, sA). Returns the interval and beta_T(z) = c_T + d_T z.
 
     a = np.asarray(a, dtype=float).ravel()
@@ -37,11 +37,11 @@ def compute_Zu(XA, XAc, a, b, A, sA, Ac, lambda_T, nT):
 
     # Active :
     # beta_A(z) = c[A] + d[A] z, where
-    # c[A] = (XA.T XA)^(-1) (XA.T a - nT lambda_T sA)
+    # c[A] = (XA.T XA)^(-1) (XA.T a - nt lambda_T sA)
     # d[A] = (XA.T XA)^(-1) XA.T b
     if len(A) > 0:
         gram = XA.T @ XA
-        c[A] = np.linalg.solve(gram, XA.T @ a - nT * lambda_T * sA)
+        c[A] = np.linalg.solve(gram, XA.T @ a - nt * lambda_T * sA)
         d[A] = np.linalg.solve(gram, XA.T @ b)
 
         # sign(beta_A(z)) = sA
@@ -56,9 +56,9 @@ def compute_Zu(XA, XAc, a, b, A, sA, Ac, lambda_T, nT):
     if len(Ac) > 0:
         e0 = a - XA @ c[A]
         e1 = b - XA @ d[A]
-        scale = nT * lambda_T
+        scale = nt * lambda_T
 
-        # q_Ac(z) = XAc.T (y(z) - XA beta_A(z)) / (nT lambda_T)
+        # q_Ac(z) = XAc.T (y(z) - XA beta_A(z)) / (nt lambda_T)
         #         = q0 + q1 z
         q0 = XAc.T @ e0 / scale
         q1 = XAc.T @ e1 / scale
@@ -126,9 +126,9 @@ def compute_Zv(XA, XAc, a, b, A, sA, Ac, w, lambda_0, N):
     return l, r, c, d
 
 
-def compute_ZG(X0, a, b, cC, dC, lambda_T, nT):
+def compute_ZG(X0, a, b, cC, dC, lambda_T, nt):
     # beta_C(z) = cC + dC z
-    # g(z) = X0.T (a + bz - X0 beta_C(z)) / nT
+    # g(z) = X0.T (a + bz - X0 beta_C(z)) / nt
     #      = g0 + g1 z
     a = np.asarray(a, dtype=float).ravel()
     b = np.asarray(b, dtype=float).ravel()
@@ -137,8 +137,8 @@ def compute_ZG(X0, a, b, cC, dC, lambda_T, nT):
 
     p = X0.shape[1]
 
-    g0 = X0.T @ (a - X0 @ cC) / nT
-    g1 = X0.T @ (b - X0 @ dC) / nT
+    g0 = X0.T @ (a - X0 @ cC) / nt
+    g1 = X0.T @ (b - X0 @ dC) / nt
 
     # ||g(z)||_inf <= lambda_T
     # <=> g1 z <= lambda_T 1_p - g0
