@@ -23,7 +23,7 @@ def construct_setup(X0, y0, X_list, y_list, V=3):
         families.append({"target": True, "fold": v, "rows": target[tr], "X": X0[tr],
                          "grid": lambda_T, "w": np.ones(p), "block": slice(0, p)})
     for v, Iv in held_out:
-        keep = np.setdiff1d(np.arange(N), target[Iv])
+        keep = np.setdiff1d(np.arange(n), target[Iv])
         families.append({"target": False, "fold": v, "rows": keep, "X": X[keep],
                          "grid": lambda_0, "w": w, "block": slice(X.shape[1] - p, None)})
 
