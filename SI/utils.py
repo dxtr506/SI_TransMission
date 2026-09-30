@@ -98,6 +98,6 @@ def pivot(intervals, etajTy, etaj, Sigma, tn_mu=0):
     return float(numerator/ denominator)
 
 
-def calculate_tn_p_value(intervals, etajTy, etaj, Sigma, tn_mu = 0):
+def calculate_p_value(intervals, etajTy, etaj, Sigma, tn_mu = 0):
     cdf = pivot(intervals, etajTy, etaj, Sigma, tn_mu)
     return float(2.0 * min(cdf, 1.0 - cdf))

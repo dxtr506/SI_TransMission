@@ -2,7 +2,7 @@ import numpy as np
 
 from TransMission.transmission import (build_tf_design, penalty_weights, transmission_fixed, weighted_lasso,)
 from SI.sub_prob import compute_ZG, compute_ZR, compute_Zu, compute_Zv
-from SI.utils import (calculate_a_b, calculate_tn_p_value, construct_Sigma, construct_test_statistic, merge_intervals,)
+from SI.utils import (calculate_a_b, calculate_p_value, construct_Sigma, construct_test_statistic, merge_intervals,)
 
 
 def divide_and_conquer(X0, X, a, b, M, w, lambda_0, lambda_T, z_min, z_max):
@@ -107,7 +107,7 @@ def fixed_tuning_TM_SI(X0, y0, X_list, y_list, lambda_0, lambda_T, Sigma_0, Sigm
             "feature": int(j),
             "test_statistic": etajTY,
             "intervals": intervals,
-            "p_value": calculate_tn_p_value(intervals, etajTY, etaj, Sigma),
+            "p_value": calculate_p_value(intervals, etajTY, etaj, Sigma),
         })
 
     return {
@@ -147,7 +147,7 @@ def fixed_tuning_TM_SI_randj(X0, y0, X_list, y_list, lambda_0, lambda_T, Sigma_0
             "feature": int(j),
             "test_statistic": etajTY,
             "intervals": intervals,
-            "p_value": calculate_tn_p_value(intervals, etajTY, etaj, Sigma),
+            "p_value": calculate_p_value(intervals, etajTY, etaj, Sigma),
         }]
 
     return {
