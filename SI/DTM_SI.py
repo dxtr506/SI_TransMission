@@ -50,8 +50,6 @@ def fixed_tuning_DTM_SI_randj(X0, y0, beta_tilde_list, ns_list, lambda_0, lambda
     if len(pool) == 0:
         return {"selected_model": M, "branch": observed["branch"], "results": []}
     
-    results = []
-
     nt = X0.shape[0]
     X_D, Y_D, w, lambda_0_eff = setup(X0, y0, beta_tilde_list, ns_list, lambda_0)
     fixed = Y_D[:-nt]   # pseudo-source responses stay fixed; the target block moves
