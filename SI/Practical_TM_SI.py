@@ -1,7 +1,7 @@
 import numpy as np
 from joblib import Parallel, delayed
 
-from TransMission.transmission import build_tf_design, penalty_weights, weighted_lasso
+from TransMission.transmission import build_tf_design, kkt_count, penalty_weights, weighted_lasso
 from TransMission.practical_transmission import make_folds, make_grids, practical_transmission_CV
 from SI.sub_prob import compute_Zu, compute_Zv
 from SI.utils import calculate_a_b, calculate_p_value, construct_Sigma, construct_test_statistic, merge_intervals
@@ -46,24 +46,13 @@ def compute_Z(family, beta, lambda_value, af, bf):
 
 
 def refit(family, state, idx, a, b, z, probe):
-    # Re-solve the fits `idx` of one family just right of z and store their
+    # Re-solve the fits `idx` of one family at the probe and store their
     # right endpoint, target-block signs and affine path.
     af, bf, grid = a[family["rows"]], b[family["rows"]], family["grid"]
-    tol = 1e-10 * max(1.0, abs(z))
 
     for i, beta in zip(idx, weighted_lasso(family["X"], af + bf * probe, grid[idx], family["w"])):
-        at = probe
         lo, hi, s, c, d = compute_Z(family, beta, grid[i], af, bf)
-
-        # A state narrower than the step would be skipped: probe closer to z.
-        for _ in range(10):
-            if lo <= z + tol:
-                break
-            at = z + 0.5 * (min(lo, at) - z)
-            beta = weighted_lasso(family["X"], af + bf * at, [grid[i]], family["w"])[0]
-            lo, hi, s, c, d = compute_Z(family, beta, grid[i], af, bf)
-
-        state["hi"][i] = max(hi, at)
+        state["hi"][i] = max(hi, probe)
         state["s"][i], state["c"][i], state["d"][i] = s, c, d
 
 
@@ -187,7 +176,9 @@ def solve_box(cache, lo, hi, s_T, s_0, M):
 
 
 def divide_and_conquer_practical(S, a, b, M, z_min, z_max):
-    # Return {z in [z_min, z_max] : M(Y(z)) = M} for the CV-tuned pipeline.
+    # Return {z in [z_min, z_max] : M(Y(z)) = M} for the CV-tuned pipeline,
+    # and the KKT counts (fits, violations) of the Lasso fits solved here.
+    before = dict(kkt_count)
     a = np.asarray(a, dtype=float).ravel()
     b = np.asarray(b, dtype=float).ravel()
     M = np.sort(np.asarray(M, dtype=int))
@@ -211,8 +202,10 @@ def divide_and_conquer_practical(S, a, b, M, z_min, z_max):
     intervals = []
     z = float(z_min)
     while z < z_max:
-        # Only the fits whose state ends at z are solved again.
-        probe = z + min(0.5 * (z_max - z), 1e-8 * max(1.0, abs(z)))
+        # Only the fits whose state ends at z are solved again.  The probe sits
+        # 1e-5 past z (as in PPL-SI), away from the breakpoint where Lasso solvers
+        # are least accurate; a state thinner than this step is not resolved.
+        probe = z + min(0.5 * (z_max - z), 1e-5 * max(1.0, abs(z)))
         for family, st in zip(S["families"], states):
             idx = np.flatnonzero(st["hi"] <= z)
             if idx.size:
@@ -223,7 +216,7 @@ def divide_and_conquer_practical(S, a, b, M, z_min, z_max):
         intervals += solve_box(cache, z, right, states[0]["s"], states[V + 1]["s"], M)
         z = right
 
-    return merge_intervals(intervals)
+    return merge_intervals(intervals), {k: kkt_count[k] - before[k] for k in kkt_count}
 
 
 def parallel_divide_and_conquer_practical(S, a, b, M, z_min, z_max, n_jobs, n_segments=None):
@@ -240,13 +233,16 @@ def parallel_divide_and_conquer_practical(S, a, b, M, z_min, z_max, n_jobs, n_se
     parts = Parallel(n_jobs=n_jobs, backend="loky", batch_size=1)(
         delayed(divide_and_conquer_practical)(S, a, b, M, lo, hi) for lo, hi in zip(edges[:-1], edges[1:])
     )
-    return merge_intervals([iv for part in parts for iv in part])
+    kkt = {k: sum(counts[k] for _, counts in parts) for k in kkt_count}
+    return merge_intervals([iv for part, _ in parts for iv in part]), kkt
 
 
 
 def practical_TM_SI(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3, n_jobs=1, n_segments=None):
     # Test every feature of the observed model.
+    before = dict(kkt_count)
     observed = practical_transmission_CV(X0, y0, X_list, y_list, V=V)
+    kkt_observed = {k: kkt_count[k] - before[k] for k in kkt_count}
     M = observed["feature_selection"]
     S = construct_setup(X0, y0, X_list, y_list, V)
     Sigma = construct_Sigma(Sigma_0, Sigma_K)
@@ -257,24 +253,26 @@ def practical_TM_SI(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3, n_jobs=1, n_s
         a, b = calculate_a_b(etaj, S["Y"], Sigma)
 
         sigma_eta = np.sqrt(etaj @ (Sigma @ etaj))
-        intervals = parallel_divide_and_conquer_practical(S, a, b, M, -20.0 * sigma_eta, 20.0 * sigma_eta,
-                                                          n_jobs, n_segments)
+        intervals, kkt_si = parallel_divide_and_conquer_practical(S, a, b, M, -20.0 * sigma_eta, 20.0 * sigma_eta,
+                                                                  n_jobs, n_segments)
 
-        results.append({"feature": int(j), "test_statistic": etajTY, "intervals": intervals, "p_value": calculate_p_value(intervals, etajTY, etaj, Sigma)})
+        results.append({"feature": int(j), "test_statistic": etajTY, "intervals": intervals, "p_value": calculate_p_value(intervals, etajTY, etaj, Sigma), "kkt_si": kkt_si})
 
-    return {"selected_model": M, "branch": observed["branch"], "results": results}
+    return {"selected_model": M, "branch": observed["branch"], "results": results, "kkt_observed": kkt_observed}
 
 
 def practical_TM_SI_randj(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3,
                           rng=None, candidates=None, n_jobs=1, n_segments=None):
     # Test one feature drawn uniformly from the observed model (or from its
     # intersection with `candidates`, e.g. the true support for TPR).
+    before = dict(kkt_count)
     observed = practical_transmission_CV(X0, y0, X_list, y_list, V=V)
+    kkt_observed = {k: kkt_count[k] - before[k] for k in kkt_count}
     M = observed["feature_selection"]
     pool = M if candidates is None else np.intersect1d(M, candidates)
 
     if len(pool) == 0:
-        return {"selected_model": M, "branch": observed["branch"], "results": []}
+        return {"selected_model": M, "branch": observed["branch"], "results": [], "kkt_observed": kkt_observed}
 
     S = construct_setup(X0, y0, X_list, y_list, V)
     Sigma = construct_Sigma(Sigma_0, Sigma_K)
@@ -285,9 +283,9 @@ def practical_TM_SI_randj(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3,
     a, b = calculate_a_b(etaj, S["Y"], Sigma)
 
     sigma_eta = np.sqrt(etaj @ (Sigma @ etaj))
-    intervals = parallel_divide_and_conquer_practical(S, a, b, M, -20.0 * sigma_eta, 20.0 * sigma_eta,
-                                                      n_jobs, n_segments)
+    intervals, kkt_si = parallel_divide_and_conquer_practical(S, a, b, M, -20.0 * sigma_eta, 20.0 * sigma_eta,
+                                                              n_jobs, n_segments)
 
-    results = [{"feature": int(j), "test_statistic": etajTY, "intervals": intervals, "p_value": calculate_p_value(intervals, etajTY, etaj, Sigma)}]
+    results = [{"feature": int(j), "test_statistic": etajTY, "intervals": intervals, "p_value": calculate_p_value(intervals, etajTY, etaj, Sigma), "kkt_si": kkt_si}]
 
-    return {"selected_model": M, "branch": observed["branch"], "results": results}
+    return {"selected_model": M, "branch": observed["branch"], "results": results, "kkt_observed": kkt_observed}

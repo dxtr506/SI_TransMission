@@ -14,7 +14,7 @@ def make_grids(X0, X_list, sigma=1.0, quantile=0.95, M_0=60, M_T=40, c_min=0.1, 
     lambda_0 = lambda_0_ref * multipliers_0
     lambda_T = lambda_T_ref * multipliers_T
 
-    # Descending order preserves efficient warm starts in weighted_lasso.
+    # Descending order: np.argmin of the CV loss takes the first index, so ties go to the larger lambda.
     return lambda_0[::-1].copy(), lambda_T[::-1].copy()
 
 
