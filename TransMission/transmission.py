@@ -12,7 +12,9 @@ def weighted_lasso(X, y, alphas, weights):
     Xs = np.asfortranarray(X / weights, dtype=np.float64)
     y = np.ascontiguousarray(y, dtype=np.float64)
     # ws_strategy="fixpoint", no warm start: other settings sometimes stop with a wrong active set.
-    model = Lasso(fit_intercept=False, tol=1e-12, max_iter=1000, max_epochs=100000, ws_strategy="fixpoint")
+    # tol=1e-11: for large y skglm cannot reach 1e-12; max_iter / max_epochs (skglm defaults) bound
+    # the time of a fit that does not reach tol, whose solution check_kkt still checks.
+    model = Lasso(fit_intercept=False, tol=1e-11, max_iter=50, max_epochs=50000, ws_strategy="fixpoint")
     coefs = []
     for alpha in alphas:
         model.alpha = alpha

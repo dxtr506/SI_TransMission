@@ -202,9 +202,6 @@ def divide_and_conquer_practical(S, a, b, M, z_min, z_max):
     intervals = []
     z = float(z_min)
     while z < z_max:
-        # Only the fits whose state ends at z are solved again.  The probe sits
-        # 1e-5 past z (as in PPL-SI), away from the breakpoint where Lasso solvers
-        # are least accurate; a state thinner than this step is not resolved.
         probe = z + min(0.5 * (z_max - z), 1e-5 * max(1.0, abs(z)))
         for family, st in zip(S["families"], states):
             idx = np.flatnonzero(st["hi"] <= z)
