@@ -1,21 +1,9 @@
 import numpy as np
 
-from TransMission.transmission import (build_tf_design, noise_score_references, penalty_weights, weighted_lasso,)
+from TransMission.transmission import (build_tf_design, penalty_weights, weighted_lasso,)
 
 
 # Grids, folds
-
-# def make_grids(X0, X_list, sigma=1.0, quantile=0.95, M_0=60, M_T=40, c_min=0.1, c_max=4.0, n_draws=2000, batch_size=100, seed=0):
-
-#     lambda_0_ref, lambda_T_ref = noise_score_references(X0, X_list, sigma=sigma, quantile=quantile, n_draws=n_draws, batch_size=batch_size, seed=seed,)
-
-#     multipliers_0 = np.geomspace(c_min, c_max, M_0)
-#     multipliers_T = np.geomspace(c_min, c_max, M_T)
-#     lambda_0 = lambda_0_ref * multipliers_0
-#     lambda_T = lambda_T_ref * multipliers_T
-
-#     # Descending order: np.argmin of the CV loss takes the first index, so ties go to the larger lambda.
-#     return lambda_0[::-1].copy(), lambda_T[::-1].copy()
 
 def make_grids(X0, X_list, M_0=40, M_T=40, lambda_min=0.15, lambda_max=1.5):
 
