@@ -8,7 +8,7 @@ def compute_debiased_beta_simple(Xk, yk):
     ns, p = Xk.shape
     
     alpha_scad = 0.5 * np.sqrt(np.log(p) / ns) # giá trị cố định theo cthuc
-    model = Lasso(alpha=alpha_scad, fit_intercept=False, tol=1e-12, max_iter=1000, max_epochs=100000,
+    model = Lasso(alpha=alpha_scad, fit_intercept=False, tol=1e-11, max_iter=50, max_epochs=50000,
                   ws_strategy="fixpoint")
     model.fit(Xk, yk)
     beta_hat = model.coef_
@@ -24,7 +24,7 @@ def compute_debiased_beta_simple(Xk, yk):
     w = np.where(t <= gamma_scad, gamma_scad, np.where(t <= a_scad * gamma_scad, (a_scad * gamma_scad - t) / (a_scad - 1), 0.0))
     w = np.where(w < 1e-8, 1e-8, w)
 
-    model = Lasso(alpha=1.0, fit_intercept=False, tol=1e-12, max_iter=1000, max_epochs=100000,
+    model = Lasso(alpha=1.0, fit_intercept=False, tol=1e-11, max_iter=50, max_epochs=50000,
                   ws_strategy="fixpoint")
     model.fit(Xk / w[None, :], yk)
     beta_tilde = model.coef_ / w
