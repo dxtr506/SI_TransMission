@@ -1,6 +1,6 @@
 import numpy as np
 
-from TransMission.transmission import (build_tf_design, penalty_weights, weighted_lasso,)
+from TransMission.transmission import build_tf_design, penalty_weights, weighted_lasso
 
 
 # Grids, folds

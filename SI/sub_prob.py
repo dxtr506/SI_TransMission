@@ -1,5 +1,12 @@
 import numpy as np
 
+# Conditioning events of practical TransMission along Y(z) = a + b z, as functions of z.
+#   1. Lasso states: each fit keeps its active set and signs on an interval of z.
+#   2. Verification: J[i, t] = {z : lambda_0[i] passes both checks with lambda_T[t]}.
+#   3. CV choice: CV losses are quadratic in z; their argmin changes only where two cross.
+
+
+# 1. Lasso states
 
 def solve_interval(psi, gamma):
     lu, ru = -np.inf, np.inf
@@ -126,47 +133,76 @@ def compute_Zv(XA, XAc, a, b, A, sA, Ac, w, lambda_0, N):
     return l, r, c, d
 
 
-def compute_ZG(X0, a, b, cC, dC, lambda_T, nt):
-    # beta_C(z) = cC + dC z
-    # g(z) = X0.T (a + bz - X0 beta_C(z)) / nt
-    #      = g0 + g1 z
-    a = np.asarray(a, dtype=float).ravel()
-    b = np.asarray(b, dtype=float).ravel()
-    cC = np.asarray(cC, dtype=float).ravel()
-    dC = np.asarray(dC, dtype=float).ravel()
+# 2. Verification
 
-    p = X0.shape[1]
-
-    g0 = X0.T @ (a - X0 @ cC) / nt
-    g1 = X0.T @ (b - X0 @ dC) / nt
-
-    # ||g(z)||_inf <= lambda_T
-    # <=> g1 z <= lambda_T 1_p - g0
-    # and -g1 z <= lambda_T 1_p + g0
-    psi = np.concatenate([g1, -g1])
-    gamma = np.concatenate([lambda_T * np.ones(p) - g0, lambda_T * np.ones(p) + g0])
-
-    l, r = solve_interval(psi, gamma)
-    return l, r
+def compute_B(s, c, d, lambda_T):
+    # Target fits t: B_t(z) = ||beta_T,t(z)||_1 + |A_t| lambda_T[t] = B0 + B1 z.
+    return (s * c).sum(1) + (s != 0).sum(1) * lambda_T, (s * d).sum(1)
 
 
-def compute_ZR(cT, dT, A, sA, cC, dC, C, sC, lambda_T):
-    # On Z_v, ||beta_C(z)||_1 = R0 + R1 z, where
-    # R0 = sC.T cC[C] and R1 = sC.T dC[C].
-    R0 = float(sC @ cC[C]) if len(C) > 0 else 0.0
-    R1 = float(sC @ dC[C]) if len(C) > 0 else 0.0
+def compute_R(s, c, d):
+    # Transfer candidates i: R_i(z) = ||beta_i(z)||_1 = R0 + R1 z.
+    return (s * c).sum(1), (s * d).sum(1)
 
-    # On Z_u, B(z) = ||beta_T(z)||_1 + |A| lambda_T
-    #                  = B0 + B1 z, where
-    # B0 = sA.T cT[A] + |A| lambda_T and B1 = sA.T dT[A].
-    B0 = float(sA @ cT[A]) if len(A) > 0 else 0.0
-    B1 = float(sA @ dT[A]) if len(A) > 0 else 0.0
-    B0 += len(A) * lambda_T
 
-    # R(z) <= B(z)
-    # <=> (R1 - B1) z <= B0 - R0
-    psi = [R1 - B1]
-    gamma = [B0 - R0]
+def compute_ZG(X0, a0, b0, c, d, lambda_T):
+    # Transfer candidates i: beta_i(z) = c_i + d_i z gives
+    # g_i(z) = X0.T (y0(z) - X0 beta_i(z)) / nt = G0 + G1 z.
+    # [GL, GU][i, t] = {z : ||g_i(z)||_inf <= lambda_T[t]}.
+    nt = X0.shape[0]
+    G0 = (a0 - c @ X0.T) @ X0 / nt
+    G1 = (b0 - d @ X0.T) @ X0 / nt
 
-    l, r = solve_interval(psi, gamma)
-    return l, r
+    # -lambda_T[t] <= G0 + G1 z <= lambda_T[t] on every coordinate
+    lambda_T3 = lambda_T[None, :, None]   # shape (1, M_T, 1) for broadcasting
+    g0, g1 = G0[:, None, :], G1[:, None, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        up, dn = (lambda_T3 - g0) / g1, (-lambda_T3 - g0) / g1
+    upper = np.where(g1 > 0, up, np.where(g1 < 0, dn, np.inf)).min(axis=2)
+    lower = np.where(g1 > 0, dn, np.where(g1 < 0, up, -np.inf)).max(axis=2)
+    never = ((g1 == 0) & (np.abs(g0) > lambda_T3)).any(axis=2)
+    lower[never], upper[never] = np.inf, -np.inf
+    return lower, upper
+
+
+def compute_ZR(R0, R1, B0, B1):
+    # [RL, RU][i, t] = {z : R_i(z) <= B_t(z)}
+    #                = {z : (R1_i - B1_t) z <= B0_t - R0_i}.
+    coef = R1[:, None] - B1[None, :]
+    rhs = B0[None, :] - R0[:, None]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = rhs / coef
+    lower = np.where(coef < 0, ratio, -np.inf)
+    upper = np.where(coef > 0, ratio, np.inf)
+    never = (coef == 0) & (rhs < 0)
+    lower[never], upper[never] = np.inf, -np.inf
+    return lower, upper
+
+
+def compute_J(GL, GU, RL, RU):
+    # J[i, t] = [GL, GU][i, t] ∩ [RL, RU][i, t].
+    lower, upper = np.maximum(GL, RL), np.minimum(GU, RU)
+    empty = lower > upper
+    lower[empty], upper[empty] = np.inf, -np.inf
+    return lower, upper
+
+
+# 3. CV choice
+
+def compute_cv_loss(X0v, a0v, b0v, c, d):
+    # Fold fits: ||y0[I_v](z) - X0[I_v] beta_{-v}(z)||^2 as (z^2, z, 1) coefficients.
+    E0 = a0v - c @ X0v.T
+    E1 = b0v - d @ X0v.T
+    return np.column_stack([(E1 * E1).sum(1), 2.0 * (E0 * E1).sum(1), (E0 * E0).sum(1)])
+
+
+def compute_crossings(Q, k):
+    # Roots of L_k(z) - L_j(z) = 0 for every j (nan where there are none).
+    A2, A1, A0 = (Q[k] - Q).T
+    disc = A1 * A1 - 4.0 * A2 * A0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        q = -0.5 * (A1 + np.copysign(np.sqrt(disc), A1))
+        roots = np.column_stack([q / A2, A0 / q])
+    roots[disc < 0] = np.nan
+    roots[k] = np.nan
+    return roots
