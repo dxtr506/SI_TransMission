@@ -1,5 +1,6 @@
 import numpy as np
 from joblib import Parallel, delayed
+from scipy.stats import norm
 
 from TransMission.transmission import build_tf_design, kkt_count, penalty_weights, weighted_lasso
 from TransMission.practical_transmission import make_folds, make_grids, practical_transmission_CV
@@ -18,7 +19,7 @@ def construct_setup(X0, y0, X_list, y_list, V=3):
     nt, p = X0.shape
     X, Y = build_tf_design(X0, y0, X_list, y_list)
     n = X.shape[0]
-    lambda_0, lambda_T = make_grids(X0, X_list)
+    lambda_0, lambda_T = make_grids()
     w = penalty_weights(X0, X_list)
     folds = make_folds(nt, V)
 
@@ -86,10 +87,9 @@ def update_cache(S, cache, family, state, idx, a, b):
             roots[k] = roots[:, k] = compute_crossings(Q, k)
 
 
-def partition(lo, hi, J_lo, J_hi, cache, s_T, s_0, M, lambda_obs=None):
+def partition(lo, hi, J_lo, J_hi, cache, s_T, s_0, M):
     # Cut [lo, hi] where a verification check switches or two CV losses cross,
     # then decide the output on each piece exactly as the pipeline does.
-    # lambda_obs = (branch, grid index) additionally conditions on the selected lambda.
     Q_T, Q_0 = cache["Q_T"], cache["Q_0"]
     cuts = np.concatenate([J_lo.ravel(), J_hi.ravel(),
                            cache["roots_0"].ravel(), cache["roots_T"].ravel()])
@@ -102,39 +102,29 @@ def partition(lo, hi, J_lo, J_hi, cache, s_T, s_0, M, lambda_obs=None):
         feasible = np.flatnonzero(((J_lo <= z) & (z <= J_hi)).any(axis=1))
         if feasible.size:
             # transmission: first argmin of L_CV over the feasible lambda_0
-            chosen = ("transmission", int(feasible[np.argmin(Q_0[feasible] @ powers)]))
-            model = np.flatnonzero(s_0[chosen[1]])
+            model = np.flatnonzero(s_0[feasible[np.argmin(Q_0[feasible] @ powers)]])
         else:
             # fallback: target Lasso at the first argmin of L_CV,T
-            chosen = ("fallback", int(np.argmin(Q_T @ powers)))
-            model = np.flatnonzero(s_T[chosen[1]])
-        if np.array_equal(model, M) and (lambda_obs is None or chosen == lambda_obs):
+            model = np.flatnonzero(s_T[np.argmin(Q_T @ powers)])
+        if np.array_equal(model, M):
             kept.append((left, right))
     return kept
 
 
-def solve_box(cache, lo, hi, s_T, s_0, M, lambda_obs=None):
+def solve_box(cache, lo, hi, s_T, s_0, M):
     RL, RU = compute_ZR(cache["R0"], cache["R1"], cache["B0"], cache["B1"])
     J_lo, J_hi = compute_J(cache["GL"], cache["GU"], RL, RU)
-    return partition(lo, hi, J_lo, J_hi, cache, s_T, s_0, M, lambda_obs)
+    return partition(lo, hi, J_lo, J_hi, cache, s_T, s_0, M)
 
 
-
-def divide_and_conquer_practical(S, a, b, M, z_min, z_max, lambda_obs=None):
-    # Return {z in [z_min, z_max] : M(Y(z)) = M} for the CV-tuned pipeline,
-    # and the KKT counts (fits, violations) of the Lasso fits solved here.
-    before = dict(kkt_count)
-    a = np.asarray(a, dtype=float).ravel()
-    b = np.asarray(b, dtype=float).ravel()
-    M = np.sort(np.asarray(M, dtype=int))
-
+def init_states_cache(S):
+    # states: target full, target folds, transfer full, transfer folds.
+    # cache: per-fit quantities, refreshed by update_cache whenever a fit changes state.
     p, V = S["X0"].shape[1], len(S["folds"])
     M0, MT = S["lambda_0"].size, S["lambda_T"].size
-    # states: target full, target folds, transfer full, transfer folds.
     states = [{"hi": np.full(family["grid"].size, -np.inf), "s": np.zeros((family["grid"].size, p)),
                "c": np.zeros((family["grid"].size, p)), "d": np.zeros((family["grid"].size, p))}
               for family in S["families"]]
-    # Per-fit quantities, refreshed by update_cache whenever a fit changes state.
     cache = {
         "B0": np.zeros(MT), "B1": np.zeros(MT),
         "GL": np.zeros((M0, MT)), "GU": np.zeros((M0, MT)),
@@ -143,6 +133,58 @@ def divide_and_conquer_practical(S, a, b, M, z_min, z_max, lambda_obs=None):
         "Q_T": np.zeros((MT, 3)), "Q_0": np.zeros((M0, 3)),
         "roots_T": np.full((MT, MT, 2), np.nan), "roots_0": np.full((M0, M0, 2), np.nan),
     }
+    return states, cache
+
+
+def over_conditioning_interval(S, a, b, z_obs):
+    # Interval around z_obs on which every fit keeps its observed active set and signs,
+    # every (lambda_0, lambda_T) pair keeps its observed feasibility, and the selected
+    # lambda stays the same. Returns the interval and the KKT counts of the fits solved here.
+    before = dict(kkt_count)
+    a = np.asarray(a, dtype=float).ravel()
+    b = np.asarray(b, dtype=float).ravel()
+    states, cache = init_states_cache(S)
+
+    # 1. Lasso states: intersection of the KKT intervals of all fits at z_obs
+    lo, hi = -np.inf, np.inf
+    for family, st in zip(S["families"], states):
+        af, bf, grid = a[family["rows"]], b[family["rows"]], family["grid"]
+        for i, beta in enumerate(weighted_lasso(family["X"], af + bf * z_obs, grid, family["w"])):
+            l, r, st["s"][i], st["c"][i], st["d"][i] = compute_Z(family, beta, grid[i], af, bf)
+            lo, hi = max(lo, l), min(hi, r)
+        update_cache(S, cache, family, st, np.arange(grid.size), a, b)
+
+    # 2. Verification: every pair keeps its observed feasibility
+    RL, RU = compute_ZR(cache["R0"], cache["R1"], cache["B0"], cache["B1"])
+    J_lo, J_hi = compute_J(cache["GL"], cache["GU"], RL, RU)
+    feasible = (J_lo <= z_obs) & (z_obs <= J_hi)
+    lo = max(lo, J_lo[feasible].max(initial=-np.inf), J_hi[~feasible & (J_hi < z_obs)].max(initial=-np.inf))
+    hi = min(hi, J_hi[feasible].min(initial=np.inf), J_lo[~feasible & (J_lo > z_obs)].min(initial=np.inf))
+
+    # 3. CV choice: the selected lambda keeps the smallest CV loss among its candidates
+    rows = np.flatnonzero(feasible.any(axis=1))
+    if rows.size:
+        Q, roots, candidates = cache["Q_0"], cache["roots_0"], rows
+    else:
+        Q, roots, candidates = cache["Q_T"], cache["roots_T"], np.arange(S["lambda_T"].size)
+    chosen = candidates[np.argmin(Q[candidates] @ np.array([z_obs * z_obs, z_obs, 1.0]))]
+    crossings = roots[chosen][candidates].ravel()
+    crossings = crossings[np.isfinite(crossings)]
+    lo = max(lo, crossings[crossings < z_obs].max(initial=-np.inf))
+    hi = min(hi, crossings[crossings > z_obs].min(initial=np.inf))
+
+    return (lo, hi), {k: kkt_count[k] - before[k] for k in kkt_count}
+
+
+def divide_and_conquer_practical(S, a, b, M, z_min, z_max):
+    # Return {z in [z_min, z_max] : M(Y(z)) = M} for the CV-tuned pipeline,
+    # and the KKT counts (fits, violations) of the Lasso fits solved here.
+    before = dict(kkt_count)
+    a = np.asarray(a, dtype=float).ravel()
+    b = np.asarray(b, dtype=float).ravel()
+    M = np.sort(np.asarray(M, dtype=int))
+    V = len(S["folds"])
+    states, cache = init_states_cache(S)
 
     intervals = []
     z = float(z_min)
@@ -155,13 +197,13 @@ def divide_and_conquer_practical(S, a, b, M, z_min, z_max, lambda_obs=None):
                 update_cache(S, cache, family, st, idx, a, b)
 
         right = min(min(st["hi"].min() for st in states), z_max)
-        intervals += solve_box(cache, z, right, states[0]["s"], states[V + 1]["s"], M, lambda_obs)
+        intervals += solve_box(cache, z, right, states[0]["s"], states[V + 1]["s"], M)
         z = right
 
     return merge_intervals(intervals), {k: kkt_count[k] - before[k] for k in kkt_count}
 
 
-def parallel_divide_and_conquer_practical(S, a, b, M, z_min, z_max, n_jobs, n_segments=None, lambda_obs=None):
+def parallel_divide_and_conquer_practical(S, a, b, M, z_min, z_max, n_jobs, n_segments=None):
     # Split [z_min, z_max] into n_segments equal segments (default n_jobs, as in
     # Algorithm 3 of PPL-SI) and traverse them with n_jobs processes.  With more
     # segments than processes, a process that finishes a segment takes the next
@@ -170,32 +212,24 @@ def parallel_divide_and_conquer_practical(S, a, b, M, z_min, z_max, n_jobs, n_se
     if n_segments is None:
         n_segments = n_jobs
     if n_segments == 1:
-        return divide_and_conquer_practical(S, a, b, M, z_min, z_max, lambda_obs)
+        return divide_and_conquer_practical(S, a, b, M, z_min, z_max)
     edges = np.linspace(z_min, z_max, n_segments + 1)
     parts = Parallel(n_jobs=n_jobs, backend="loky", batch_size=1)(
-        delayed(divide_and_conquer_practical)(S, a, b, M, lo, hi, lambda_obs) for lo, hi in zip(edges[:-1], edges[1:])
+        delayed(divide_and_conquer_practical)(S, a, b, M, lo, hi) for lo, hi in zip(edges[:-1], edges[1:])
     )
     kkt = {k: sum(counts[k] for _, counts in parts) for k in kkt_count}
     return merge_intervals([iv for part, _ in parts for iv in part]), kkt
 
 
 
-def practical_TM_SI(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3, n_jobs=1, n_segments=None,
-                    condition_on_lambda=False):
+def practical_TM_SI(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3, n_jobs=1, n_segments=None):
     # Test every feature of the observed model.
-    # condition_on_lambda=True also conditions on the selected lambda (as in PPL-SI).
     before = dict(kkt_count)
     observed = practical_transmission_CV(X0, y0, X_list, y_list, V=V)
     kkt_observed = {k: kkt_count[k] - before[k] for k in kkt_count}
     M = observed["feature_selection"]
     S = construct_setup(X0, y0, X_list, y_list, V)
     Sigma = construct_Sigma(Sigma_0, Sigma_K)
-    lambda_obs = None
-    if condition_on_lambda:
-        if observed["branch"] == "transmission":
-            lambda_obs = ("transmission", int(np.flatnonzero(S["lambda_0"] == observed["lam0_hat"])[0]))
-        else:
-            lambda_obs = ("fallback", int(np.argmin(observed["Lcv_T"])))
     results = []
 
     for j in M:
@@ -204,7 +238,7 @@ def practical_TM_SI(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3, n_jobs=1, n_s
 
         sigma_eta = np.sqrt(etaj @ (Sigma @ etaj))
         intervals, kkt_si = parallel_divide_and_conquer_practical(S, a, b, M, -20.0 * sigma_eta, 20.0 * sigma_eta,
-                                                                  n_jobs, n_segments, lambda_obs)
+                                                                  n_jobs, n_segments)
 
         results.append({"feature": int(j), "test_statistic": etajTY, "intervals": intervals, "p_value": calculate_p_value(intervals, etajTY, etaj, Sigma), "kkt_si": kkt_si})
 
@@ -212,10 +246,11 @@ def practical_TM_SI(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3, n_jobs=1, n_s
 
 
 def practical_TM_SI_randj(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3,
-                          rng=None, candidates=None, n_jobs=1, n_segments=None, condition_on_lambda=False):
+                          rng=None, candidates=None, n_jobs=1, n_segments=None):
     # Test one feature drawn uniformly from the observed model (or from its
     # intersection with `candidates`, e.g. the true support for TPR).
-    # condition_on_lambda=True also conditions on the selected lambda (as in PPL-SI).
+    # The same feature also gets the over-conditioning p-value (everything the pipeline
+    # decides is conditioned on, so the region is one interval) and the naive p-value.
     before = dict(kkt_count)
     observed = practical_transmission_CV(X0, y0, X_list, y_list, V=V)
     kkt_observed = {k: kkt_count[k] - before[k] for k in kkt_count}
@@ -227,12 +262,6 @@ def practical_TM_SI_randj(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3,
 
     S = construct_setup(X0, y0, X_list, y_list, V)
     Sigma = construct_Sigma(Sigma_0, Sigma_K)
-    lambda_obs = None
-    if condition_on_lambda:
-        if observed["branch"] == "transmission":
-            lambda_obs = ("transmission", int(np.flatnonzero(S["lambda_0"] == observed["lam0_hat"])[0]))
-        else:
-            lambda_obs = ("fallback", int(np.argmin(observed["Lcv_T"])))
     rng = np.random.default_rng(rng)
     j = pool[rng.integers(len(pool))]
 
@@ -240,9 +269,40 @@ def practical_TM_SI_randj(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3,
     a, b = calculate_a_b(etaj, S["Y"], Sigma)
 
     sigma_eta = np.sqrt(etaj @ (Sigma @ etaj))
-    intervals, kkt_si = parallel_divide_and_conquer_practical(S, a, b, M, -20.0 * sigma_eta, 20.0 * sigma_eta,
-                                                              n_jobs, n_segments, lambda_obs)
+    z_min, z_max = -20.0 * sigma_eta, 20.0 * sigma_eta
+    intervals, kkt_si = parallel_divide_and_conquer_practical(S, a, b, M, z_min, z_max, n_jobs, n_segments)
 
-    results = [{"feature": int(j), "test_statistic": etajTY, "intervals": intervals, "p_value": calculate_p_value(intervals, etajTY, etaj, Sigma), "kkt_si": kkt_si}]
+    (lo, hi), kkt_oc = over_conditioning_interval(S, a, b, etajTY)
+    interval_oc = (max(lo, z_min), min(hi, z_max))
+
+    results = [{"feature": int(j), "test_statistic": etajTY, "intervals": intervals,
+                "p_value": calculate_p_value(intervals, etajTY, etaj, Sigma), "kkt_si": kkt_si,
+                "interval_oc": interval_oc, "p_value_oc": calculate_p_value([interval_oc], etajTY, etaj, Sigma),
+                "kkt_oc": kkt_oc, "p_value_naive": float(2.0 * norm.sf(abs(etajTY) / sigma_eta))}]
 
     return {"selected_model": M, "branch": observed["branch"], "results": results, "kkt_observed": kkt_observed}
+
+
+def data_split_randj(X0, y0, X_list, y_list, Sigma_0, V=3, rng=None, candidates=None):
+    # Data splitting: run the pipeline on the first half of the target with all sources,
+    # then test one selected feature on the second half by least squares (z-test, known Sigma_0).
+    nt = X0.shape[0]
+    first, second = np.arange(nt // 2), np.arange(nt // 2, nt)
+    observed = practical_transmission_CV(X0[first], y0[first], X_list, y_list, V=V)
+    M = observed["feature_selection"]
+    pool = M if candidates is None else np.intersect1d(M, candidates)
+    out = {"selected_model": M, "branch": observed["branch"], "status": "tested", "feature": None, "p_value": None}
+    if len(pool) == 0:
+        out["status"] = "empty"
+        return out
+    if M.size >= second.size:
+        # least squares on the second half is not identifiable
+        out["status"] = "too_large"
+        return out
+
+    rng = np.random.default_rng(rng)
+    j = pool[rng.integers(len(pool))]
+    eta, z = construct_test_statistic(j, X0[second], y0[second], M)
+    sd = np.sqrt(eta @ (Sigma_0[np.ix_(second, second)] @ eta))
+    out["feature"], out["p_value"] = int(j), float(2.0 * norm.sf(abs(z) / sd))
+    return out

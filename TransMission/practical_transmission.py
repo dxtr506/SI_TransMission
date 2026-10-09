@@ -5,10 +5,10 @@ from TransMission.transmission import build_tf_design, penalty_weights, weighted
 
 # Grids, folds
 
-def make_grids(X0, X_list, M_0=40, M_T=40, lambda_min=0.15, lambda_max=1.5):
+def make_grids(M_0=40, M_T=20):
 
-    lambda_0 = np.linspace(lambda_min, lambda_max, M_0)
-    lambda_T = np.linspace(lambda_min, lambda_max, M_T)
+    lambda_0 = np.geomspace(0.04, 1, M_0)
+    lambda_T = np.geomspace(0.12, 1, M_T)
     
     return lambda_0, lambda_T
      
@@ -32,7 +32,7 @@ def practical_transmission_CV(X0, y0, X_list, y_list, folds=None, V=3):
     N = sum(np.shape(Xk)[0] for Xk in X_list) + nt
     K = len(X_list)
 
-    lamb0_grid, lambt_grid = make_grids(X0, X_list)
+    lamb0_grid, lambt_grid = make_grids()
   
     if folds is None:
         folds = make_folds(nt, V)
