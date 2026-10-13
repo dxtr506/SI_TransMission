@@ -257,7 +257,8 @@ def practical_TM_SI_randj(X0, y0, X_list, y_list, Sigma_0, Sigma_K, V=3,
     M = observed["feature_selection"]
     pool = M if candidates is None else np.intersect1d(M, candidates)
 
-    if len(pool) == 0:
+    # no test when |M| > n_T: X_{0,M} has no full column rank, so eta_j is not defined
+    if len(pool) == 0 or len(M) > X0.shape[0]:
         return {"selected_model": M, "branch": observed["branch"], "results": [], "kkt_observed": kkt_observed}
 
     S = construct_setup(X0, y0, X_list, y_list, V)

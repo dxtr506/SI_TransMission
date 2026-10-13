@@ -5,7 +5,7 @@ from TransMission.transmission import build_tf_design, penalty_weights, weighted
 
 # Grids, folds
 
-def make_grids(M_0=40, M_T=20):
+def make_grids(M_0=20, M_T=20):
 
     lambda_0 = np.geomspace(0.04, 1, M_0)
     lambda_T = np.geomspace(0.12, 1, M_T)
