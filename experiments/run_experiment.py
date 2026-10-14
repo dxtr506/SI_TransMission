@@ -82,9 +82,10 @@ def run_one(args, nt, config, results):
     rng = np.random.default_rng(args.seed + nt)
     X0, X_list = generate_design(rng, args.p, nt, args.ns, args.K)
     beta0 = np.zeros(args.p)
-    contrasts, candidates = None, None
+    # sources differ from the target by c_k in both modes; fpr keeps the target null (beta0 = 0)
+    contrasts = generate_contrasts(rng, args.p, args.K, args.H)
+    candidates = None
     if args.mode == "tpr":
-        contrasts = generate_contrasts(rng, args.p, args.K, args.H)
         candidates = np.arange(args.S)
         beta0[candidates] = args.delta
     Sigma_0 = args.sigma ** 2 * np.eye(nt)
@@ -92,7 +93,9 @@ def run_one(args, nt, config, results):
 
     kkt = {"observed_fits": 0, "observed_violations": 0, "si_fits": 0, "si_violations": 0,
            "oc_fits": 0, "oc_violations": 0}
-    entry = {"reps": [], "kkt": kkt, "kkt_si_violation_reps": []}
+    lambda_0, lambda_T = make_grids(args.p, args.K * args.ns + nt, nt)
+    entry = {"lambda_0_grid": lambda_0.tolist(), "lambda_T_grid": lambda_T.tolist(),
+             "reps": [], "kkt": kkt, "kkt_si_violation_reps": []}
     results[str(nt)] = entry
     start = time.perf_counter()
 
@@ -139,7 +142,7 @@ def main():
     parser.add_argument("--V", type=int, default=3)
     parser.add_argument("--sigma", type=float, default=1.0)
     parser.add_argument("--S", type=int, default=16, help="tpr: target support size")
-    parser.add_argument("--H", type=float, default=10.0, help="tpr: source contrast size")
+    parser.add_argument("--H", type=float, default=10.0, help="source contrast size")
     parser.add_argument("--delta", type=float, default=0.3, help="tpr: signal strength")
     parser.add_argument("--alpha", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=185)
@@ -148,8 +151,7 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    lambda_0, lambda_T = make_grids()
-    config = {**vars(args), "lambda_0_grid": lambda_0.tolist(), "lambda_T_grid": lambda_T.tolist()}
+    config = vars(args)
     results = {}
     for nt in args.nts:
         run_one(args, nt, config, results)

@@ -5,11 +5,12 @@ from TransMission.transmission import build_tf_design, penalty_weights, weighted
 
 # Grids, folds
 
-def make_grids(M_0=20, M_T=20):
+def make_grids(p, N, nt, sigma=1.0, M_0=20, M_T=20):
+    # fixed before seeing y: universal thresholds sigma * sqrt(2 log p / n)
+    lambda_0 = np.geomspace(sigma * np.sqrt(2 * np.log(p) / N), 1, M_0)
+    lam_T = sigma * np.sqrt(2 * np.log(p) / nt)
+    lambda_T = np.geomspace(0.1 * lam_T, 10 * lam_T, M_T)
 
-    lambda_0 = np.geomspace(0.04, 1, M_0)
-    lambda_T = np.geomspace(0.12, 1, M_T)
-    
     return lambda_0, lambda_T
      
 def make_folds(nt, V=3):
@@ -32,7 +33,7 @@ def practical_transmission_CV(X0, y0, X_list, y_list, folds=None, V=3):
     N = sum(np.shape(Xk)[0] for Xk in X_list) + nt
     K = len(X_list)
 
-    lamb0_grid, lambt_grid = make_grids()
+    lamb0_grid, lambt_grid = make_grids(p, N, nt)
   
     if folds is None:
         folds = make_folds(nt, V)

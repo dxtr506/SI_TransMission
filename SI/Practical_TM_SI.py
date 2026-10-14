@@ -19,7 +19,7 @@ def construct_setup(X0, y0, X_list, y_list, V=3):
     nt, p = X0.shape
     X, Y = build_tf_design(X0, y0, X_list, y_list)
     n = X.shape[0]
-    lambda_0, lambda_T = make_grids()
+    lambda_0, lambda_T = make_grids(p, n, nt)
     w = penalty_weights(X0, X_list)
     folds = make_folds(nt, V)
 
