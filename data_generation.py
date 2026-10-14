@@ -9,11 +9,11 @@ def generate_design(rng, p, nt, ns, K):
 
 
 def generate_contrasts(rng, p, K, H):
-    # c_k: iid N(0, (H/50)^2) on 50 coordinates drawn at random for each source, 0 elsewhere (as He et al.)
+    # c_k: iid N(0, (H/50)^2) on the first 50 coordinates of every source, 0 elsewhere (He et al., Sec. 5.1)
     contrasts = []
     for _ in range(K):
         c = np.zeros(p)
-        c[rng.choice(p, 50, replace=False)] = rng.normal(0.0, H / 50, 50)
+        c[:50] = rng.normal(0.0, H / 50, 50)
         contrasts.append(c)
     return contrasts
 
