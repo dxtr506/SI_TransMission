@@ -6,8 +6,9 @@ from TransMission.transmission import build_tf_design, penalty_weights, weighted
 # Grids, folds
 
 def make_grids(p, N, nt, sigma=1.0, M_0=20, M_T=20):
-    # fixed before seeing y: universal thresholds sigma * sqrt(2 log p / n)
-    lambda_0 = np.geomspace(sigma * np.sqrt(2 * np.log(p) / N), 1, M_0)
+    # fixed before seeing y: universal thresholds sigma * sqrt(2 log p / n);
+    # Lambda_0 starts at the lower bound lambda_0 >= 2 ||grad||_inf of He et al., Theorem 3
+    lambda_0 = np.geomspace(2 * sigma * np.sqrt(2 * np.log(p) / N), 1, M_0)
     lam_T = sigma * np.sqrt(2 * np.log(p) / nt)
     lambda_T = np.geomspace(0.1 * lam_T, 10 * lam_T, M_T)
 
