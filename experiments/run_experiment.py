@@ -80,10 +80,7 @@ def run_split(args, X0, X_list, y0, y_list, Sigma_0, rng, candidates, i):
 
 def run_one(args, nt, config, results):
     rng = np.random.default_rng(args.seed + nt)
-    X0, X_list = generate_design(rng, args.p, nt, args.ns, args.K)
     beta0 = np.zeros(args.p)
-    # sources differ from the target by c_k in both modes; fpr keeps the target null (beta0 = 0)
-    contrasts = generate_contrasts(rng, args.p, args.K, args.H)
     candidates = None
     if args.mode == "tpr":
         candidates = np.arange(args.S)
@@ -100,6 +97,8 @@ def run_one(args, nt, config, results):
     start = time.perf_counter()
 
     for i in range(1, args.n_rep + 1):
+        X0, X_list = generate_design(rng, args.p, nt, args.ns, args.K)
+        contrasts = generate_contrasts(rng, args.p, args.K, args.H)
         y0, y_list = generate_response(rng, X0, X_list, args.sigma, beta0, contrasts)
         t = time.perf_counter()
         if args.method == "si":
