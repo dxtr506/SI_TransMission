@@ -1,5 +1,6 @@
 import numpy as np
 from skglm import Lasso
+from sklearn.linear_model import LassoLars
 
 # Solver
 
@@ -23,6 +24,16 @@ def weighted_lasso(X, y, alphas, weights):
         # w = v / a
         coef = model.coef_ / weights
 
+        # near |A| = n coordinate descent can stop short of the solution (|A| > n, empty KKT interval);
+        # such fits are re-solved exactly by the LARS-Lasso path (Efron et al., 2004),
+        # whose solution is kept only if it violates KKT less
+        viol = kkt_violation(X, y, coef, alpha, weights)
+        if viol > 1e-6:
+            lars = LassoLars(alpha=alpha, fit_intercept=False, max_iter=5000)
+            coef_lars = lars.fit(Xs, y).coef_ / weights
+            if kkt_violation(X, y, coef_lars, alpha, weights) < viol:
+                coef = coef_lars
+
         check_kkt(X, y, coef, alpha, weights)
         coefs.append(coef)
     return coefs
@@ -35,13 +46,16 @@ kkt_count = {"fits": 0, "violations": 0}
 # check nghiệm tối ưu thỏa kkt hay chưa (chỉ đếm, không dừng chương trình)
 def check_kkt(X, y, coef, alpha, weights):
     kkt_count["fits"] += 1
+    kkt_count["violations"] += int(kkt_violation(X, y, coef, alpha, weights) > 1e-6)
+
+
+# largest KKT violation of coef, relative to max(1, alpha * max weight)
+def kkt_violation(X, y, coef, alpha, weights):
     if not np.isfinite(coef).all():
-        kkt_count["violations"] += 1
-        return
+        return np.inf
     grad = -X.T @ (y - X @ coef) / X.shape[0]
     if not np.isfinite(grad).all():
-        kkt_count["violations"] += 1
-        return
+        return np.inf
     active = np.abs(coef) != 0
     viol = 0.0
 
@@ -58,8 +72,8 @@ def check_kkt(X, y, coef, alpha, weights):
         viol = max(viol, np.maximum(0.0, np.abs(grad[~active]) - alpha * weights[~active]).max())
     scale = max(1.0, alpha * weights.max())
     # skglm sometimes reports convergence while its solution violates KKT;
-    # such fits are counted here.
-    kkt_count["violations"] += int(viol > 1e-6 * scale)
+    # such fits are flagged here.
+    return viol / scale
 
 
 # Design, penalty weights
