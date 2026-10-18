@@ -24,11 +24,12 @@ def weighted_lasso(X, y, alphas, weights):
         # w = v / a
         coef = model.coef_ / weights
 
-        # near |A| = n coordinate descent can stop short of the solution (|A| > n, empty KKT interval);
+        # near |A| = n coordinate descent can stop short of the solution (|A| > n, empty KKT interval),
+        # sometimes with a KKT violation below the tolerance;
         # such fits are re-solved exactly by the LARS-Lasso path (Efron et al., 2004),
         # whose solution is kept only if it violates KKT less
         viol = kkt_violation(X, y, coef, alpha, weights)
-        if viol > 1e-6:
+        if viol > 1e-6 or np.count_nonzero(coef) > X.shape[0]:
             lars = LassoLars(alpha=alpha, fit_intercept=False, max_iter=5000)
             coef_lars = lars.fit(Xs, y).coef_ / weights
             if kkt_violation(X, y, coef_lars, alpha, weights) < viol:

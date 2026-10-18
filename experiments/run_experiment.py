@@ -48,7 +48,8 @@ def save(path, config, results):
 def run_si(args, X0, X_list, y0, y_list, Sigma_0, Sigma_K, rng, candidates, i, kkt, entry):
     # Proposed, over-conditioning and naive p-values of one repetition (same feature).
     result = practical_TM_SI_randj(X0, y0, X_list, y_list, Sigma_0, Sigma_K,
-                                   V=args.V, rng=rng, candidates=candidates, n_jobs=args.n_jobs)
+                                   V=args.V, rng=rng, candidates=candidates, n_jobs=args.n_jobs,
+                                   n_segments=args.n_segments)
     kkt["observed_fits"] += result["kkt_observed"]["fits"]
     kkt["observed_violations"] += result["kkt_observed"]["violations"]
     rep = {"rep": i, "model_size": len(result["selected_model"]), "branch": result["branch"],
@@ -135,6 +136,8 @@ def main():
     parser.add_argument("--n_tests", type=int, default=None,
                         help="stop an n_T once the method (proposed, or data splitting) has this many p-values")
     parser.add_argument("--n_jobs", type=int, default=16)
+    parser.add_argument("--n_segments", type=int, default=None,
+                        help="z-line segments shared by the n_jobs processes (default n_jobs)")
     parser.add_argument("--p", type=int, default=500)
     parser.add_argument("--ns", type=int, default=200)
     parser.add_argument("--K", type=int, default=4)
