@@ -137,7 +137,7 @@ def main():
                         help="stop an n_T once the method (proposed, or data splitting) has this many p-values")
     parser.add_argument("--n_jobs", type=int, default=16)
     parser.add_argument("--n_segments", type=int, default=None,
-                        help="z-line segments shared by the n_jobs processes (default n_jobs)")
+                        help="z-line segments shared by the n_jobs processes (default: spread the fits instead)")
     parser.add_argument("--p", type=int, default=500)
     parser.add_argument("--ns", type=int, default=200)
     parser.add_argument("--K", type=int, default=4)

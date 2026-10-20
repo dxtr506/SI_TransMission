@@ -178,7 +178,7 @@ def over_conditioning_interval(S, a, b, z_obs):
 
 def divide_and_conquer_practical(S, a, b, M, z_min, z_max):
     # Return {z in [z_min, z_max] : M(Y(z)) = M} for the CV-tuned pipeline,
-    # and the KKT counts (fits, violations) of the Lasso fits solved here.
+    # the KKT counts (fits, violations) of the Lasso fits solved here, and the number of boxes.
     before = dict(kkt_count)
     a = np.asarray(a, dtype=float).ravel()
     b = np.asarray(b, dtype=float).ravel()
@@ -186,7 +186,7 @@ def divide_and_conquer_practical(S, a, b, M, z_min, z_max):
     V = len(S["folds"])
     states, cache = init_states_cache(S)
 
-    intervals = []
+    intervals, boxes = [], 0
     z = float(z_min)
     while z < z_max:
         probe = z + min(0.5 * (z_max - z), 1e-5 * max(1.0, abs(z)))
@@ -198,26 +198,82 @@ def divide_and_conquer_practical(S, a, b, M, z_min, z_max):
 
         right = min(min(st["hi"].min() for st in states), z_max)
         intervals += solve_box(cache, z, right, states[0]["s"], states[V + 1]["s"], M)
+        boxes += 1
         z = right
 
-    return merge_intervals(intervals), {k: kkt_count[k] - before[k] for k in kkt_count}
+    counts = {k: kkt_count[k] - before[k] for k in kkt_count}
+    counts["boxes"] = boxes
+    return merge_intervals(intervals), counts
+
+
+def fit_path(family, lam, a, b, z_min, z_max):
+    # Path of one fit over [z_min, z_max], solved only at its own breakpoints:
+    # the (end, target-block signs, affine path) of each piece, and the KKT counts.
+    before = dict(kkt_count)
+    af, bf = a[family["rows"]], b[family["rows"]]
+    pieces = []
+    z = float(z_min)
+    while z < z_max:
+        probe = z + min(0.5 * (z_max - z), 1e-5 * max(1.0, abs(z)))
+        beta = weighted_lasso(family["X"], af + bf * probe, np.array([lam]), family["w"])[0]
+        _, hi, s, c, d = compute_Z(family, beta, lam, af, bf)
+        hi = min(max(hi, probe), z_max)
+        pieces.append((hi, s, c, d))
+        z = hi
+    return pieces, {k: kkt_count[k] - before[k] for k in kkt_count}
+
+
+def per_fit_divide_and_conquer_practical(S, a, b, M, z_min, z_max, n_jobs):
+    # Same region as divide_and_conquer_practical, with the fits spread over n_jobs processes:
+    # each process traverses whole fit paths, so no fit is re-initialized at a segment boundary.
+    # A serial sweep over the merged breakpoints then decides each box from the cached paths.
+    a = np.asarray(a, dtype=float).ravel()
+    b = np.asarray(b, dtype=float).ravel()
+    M = np.sort(np.asarray(M, dtype=int))
+    V = len(S["folds"])
+    tasks = [(f, i) for f, family in enumerate(S["families"]) for i in range(family["grid"].size)]
+    parts = Parallel(n_jobs=n_jobs, backend="loky", batch_size=1)(
+        delayed(fit_path)(S["families"][f], S["families"][f]["grid"][i], a, b, z_min, z_max) for f, i in tasks
+    )
+    kkt = {k: sum(counts[k] for _, counts in parts) for k in kkt_count}
+    paths = [[None] * family["grid"].size for family in S["families"]]
+    for (f, i), (pieces, _) in zip(tasks, parts):
+        paths[f][i] = iter(pieces)
+
+    states, cache = init_states_cache(S)
+    intervals, boxes = [], 0
+    z = float(z_min)
+    while z < z_max:
+        for f, (family, st) in enumerate(zip(S["families"], states)):
+            idx = np.flatnonzero(st["hi"] <= z)
+            if idx.size:
+                for i in idx:
+                    st["hi"][i], st["s"][i], st["c"][i], st["d"][i] = next(paths[f][i])
+                update_cache(S, cache, family, st, idx, a, b)
+
+        right = min(min(st["hi"].min() for st in states), z_max)
+        intervals += solve_box(cache, z, right, states[0]["s"], states[V + 1]["s"], M)
+        boxes += 1
+        z = right
+
+    kkt["boxes"] = boxes
+    return merge_intervals(intervals), kkt
 
 
 def parallel_divide_and_conquer_practical(S, a, b, M, z_min, z_max, n_jobs, n_segments=None):
-    # Split [z_min, z_max] into n_segments equal segments (default n_jobs, as in
-    # Algorithm 3 of PPL-SI) and traverse them with n_jobs processes.  With more
-    # segments than processes, a process that finishes a segment takes the next
-    # one, so no process sits idle waiting for the heaviest segment.  Every
-    # segment is traversed exactly, so the union is exact.
+    # Default (n_segments None): spread the fits over n_jobs processes (per_fit_divide_and_conquer_practical).
+    # Otherwise split [z_min, z_max] into n_segments equal segments, as in Algorithm 3 of PPL-SI,
+    # and traverse them with n_jobs processes; every process re-initializes all fits at the start of
+    # its segment.  Both traversals are exact, so they return the same region.
     if n_segments is None:
-        n_segments = n_jobs
+        return per_fit_divide_and_conquer_practical(S, a, b, M, z_min, z_max, n_jobs)
     if n_segments == 1:
         return divide_and_conquer_practical(S, a, b, M, z_min, z_max)
     edges = np.linspace(z_min, z_max, n_segments + 1)
     parts = Parallel(n_jobs=n_jobs, backend="loky", batch_size=1)(
         delayed(divide_and_conquer_practical)(S, a, b, M, lo, hi) for lo, hi in zip(edges[:-1], edges[1:])
     )
-    kkt = {k: sum(counts[k] for _, counts in parts) for k in kkt_count}
+    kkt = {k: sum(counts[k] for _, counts in parts) for k in parts[0][1]}
     return merge_intervals([iv for part, _ in parts for iv in part]), kkt
 
 
