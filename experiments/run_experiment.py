@@ -6,7 +6,7 @@ import time
 import numpy as np
 from scipy import stats
 
-from data_generation import generate_contrasts, generate_design, generate_response
+from data_generation import NOISES, generate_contrasts, generate_design, generate_response
 from SI.Practical_TM_SI import data_split_randj, practical_TM_SI_randj
 from TransMission.practical_transmission import make_grids
 
@@ -100,7 +100,7 @@ def run_one(args, nt, config, results):
     for i in range(1, args.n_rep + 1):
         X0, X_list = generate_design(rng, args.p, nt, args.ns, args.K)
         contrasts = generate_contrasts(rng, args.p, args.K, args.H)
-        y0, y_list = generate_response(rng, X0, X_list, args.sigma, beta0, contrasts)
+        y0, y_list = generate_response(rng, X0, X_list, args.sigma, beta0, contrasts, args.noise)
         t = time.perf_counter()
         if args.method == "si":
             rep = run_si(args, X0, X_list, y0, y_list, Sigma_0, Sigma_K, rng, candidates, i, kkt, entry)
@@ -143,6 +143,8 @@ def main():
     parser.add_argument("--K", type=int, default=4)
     parser.add_argument("--V", type=int, default=3)
     parser.add_argument("--sigma", type=float, default=1.0)
+    parser.add_argument("--noise", choices=NOISES, default="normal",
+                        help="error distribution, standardized to mean 0 and variance 1 (robustness)")
     parser.add_argument("--S", type=int, default=16, help="tpr: target support size")
     parser.add_argument("--H", type=float, default=10.0, help="source contrast size")
     parser.add_argument("--delta", type=float, default=0.3, help="tpr: signal strength")
